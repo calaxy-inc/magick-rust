@@ -200,7 +200,9 @@ impl KernelInfo {
 
     /// The values within the kernel is scaled directly using given scaling factor without change.
     pub fn scale(&mut self, factor: f64) {
-        unsafe { bindings::ScaleKernelInfo(self.kernel_info, factor, bindings::GeometryFlags::NoValue) }
+        unsafe {
+            bindings::ScaleKernelInfo(self.kernel_info, factor, bindings::GeometryFlags::NoValue)
+        }
     }
 
     /// Kernel normalization is designed to ensure that any use of the kernel scaling factor with
