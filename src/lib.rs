@@ -43,7 +43,7 @@ mod conversions;
 mod result;
 mod types;
 mod wand;
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+include!("./bindings.rs");
 
 /// This function must be called before any other ImageMagick operations
 /// are attempted. This function is safe to be called repeatedly.

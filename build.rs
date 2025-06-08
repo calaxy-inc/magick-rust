@@ -13,33 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-extern crate bindgen;
-extern crate pkg_config;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
-use std::fs::File;
-use std::io::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 const MIN_VERSION: &str = "7.1.1";
 const MAX_VERSION: &str = "7.2";
-
-#[cfg(windows)]
-static HEADER: &str = r#"
-#if !defined(ssize_t) && !defined(__MINGW32__)
-#if defined(_WIN64)
-typedef __int64 ssize_t;
-#else
-typedef long ssize_t;
-#endif
-#endif
-
-#include <MagickWand/MagickWand.h>
-"#;
-#[cfg(not(windows))]
-static HEADER: &str = "#include <MagickWand/MagickWand.h>\n";
 
 //on windows path env always contain : like c:
 pub const PATH_SEPARATOR: &str = match cfg!(target_os = "windows") {
@@ -47,86 +28,7 @@ pub const PATH_SEPARATOR: &str = match cfg!(target_os = "windows") {
     _ => ":",
 };
 
-#[derive(Debug)]
-struct IgnoreMacros {
-    macros_to_ignore: HashSet<String>
-}
-
-impl IgnoreMacros {
-    fn from_iter<S, I>(macro_names: I) -> Self
-    where
-        S: Into<String>,
-        I: IntoIterator<Item = S>
-    {
-        let mut macros_to_ignore = HashSet::new();
-        for macro_name in macro_names {
-            macros_to_ignore.insert(macro_name.into());
-        }
-        Self {
-            macros_to_ignore
-        }
-    }
-}
-
-impl bindgen::callbacks::ParseCallbacks for IgnoreMacros {
-    fn will_parse_macro(&self, name: &str) -> bindgen::callbacks::MacroParsingBehavior {
-        if self.macros_to_ignore.contains(name) {
-            bindgen::callbacks::MacroParsingBehavior::Ignore
-        } else {
-            bindgen::callbacks::MacroParsingBehavior::Default
-        }
-    }
-}
-
-#[derive(Debug)]
-struct RemoveEnumVariantSuffixes {
-    names_to_suffix: HashMap<String, String>
-}
-
-impl RemoveEnumVariantSuffixes {
-    fn from_iter<S, I>(enum_suffix_pairs: I) -> Self
-    where
-        S: Into<String>,
-        I: IntoIterator<Item = (S, S)>,
-    {
-        let mut names_to_suffix = HashMap::new();
-        for (enum_name, variant_suffix) in enum_suffix_pairs {
-            names_to_suffix.insert(enum_name.into(), variant_suffix.into());
-        }
-
-        Self {
-            names_to_suffix
-        }
-    }
-}
-
-impl bindgen::callbacks::ParseCallbacks for RemoveEnumVariantSuffixes {
-    fn enum_variant_name(
-        &self,
-        enum_name: Option<&str>,
-        original_variant_name: &str,
-        _variant_value: bindgen::callbacks::EnumVariantValue
-    ) -> Option<String> {
-        let suffix = self.names_to_suffix.get(enum_name?)?;
-        Some(original_variant_name.trim_end_matches(suffix).to_string())
-    }
-}
-
 fn main() {
-    let check_cppflags = Command::new("MagickCore-config")
-        .arg("--cppflags")
-        .output()
-        .or_else(|_| {
-            Command::new("pkg-config")
-                .args(["--cflags", "MagickCore"])
-                .output()
-        });
-    if let Ok(ok_cppflags) = check_cppflags {
-        let cppflags = ok_cppflags.stdout;
-        let cppflags = String::from_utf8(cppflags).unwrap();
-        env_var_set_default("BINDGEN_EXTRA_CLANG_ARGS", &cppflags);
-    }
-
     let lib_dirs = find_image_magick_lib_dirs();
     for d in &lib_dirs {
         if !d.exists() {
@@ -155,7 +57,10 @@ fn main() {
         Ok(ref v) => v.split(PATH_SEPARATOR).map(|x| x.to_owned()).collect(),
         Err(_) => {
             if target.contains("windows") {
-                vec!["CORE_RL_MagickWand_".to_string(), "CORE_RL_MagickCore_".to_string()]
+                vec![
+                    "CORE_RL_MagickWand_".to_string(),
+                    "CORE_RL_MagickCore_".to_string(),
+                ]
             } else if target.contains("freebsd") {
                 vec!["MagickWand-7".to_string()]
             } else {
@@ -167,151 +72,6 @@ fn main() {
     let kind = determine_mode(&lib_dirs, libs.as_slice());
     for lib in libs.into_iter() {
         println!("cargo:rustc-link-lib={}={}", kind, lib);
-    }
-
-    // If the generated bindings are missing, generate them now.
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let bindings_path_str = out_dir.join("bindings.rs");
-
-    let ignored_macros = IgnoreMacros::from_iter([
-        "FP_INFINITE",
-        "FP_NAN",
-        "FP_NORMAL",
-        "FP_SUBNORMAL",
-        "FP_ZERO",
-        "IPPORT_RESERVED",
-        "FP_INT_UPWARD",
-        "FP_INT_DOWNWARD",
-        "FP_INT_TOWARDZERO",
-        "FP_INT_TONEARESTFROMZERO",
-        "FP_INT_TONEAREST",
-    ]);
-
-    let remove_enum_suffixes = RemoveEnumVariantSuffixes::from_iter([
-        ("ClassType", "Class"),
-        ("CompositeOperator", "CompositeOp"),
-        ("GravityType", "Gravity"),
-        ("ImageType", "Type"),
-        ("InterlaceType", "Interlace"),
-        ("OrientationType", "Orientation"),
-        ("ResolutionType", "Resolution"),
-        ("TransmitType", "TransmitType"),
-        ("MapMode", "Mode"),
-        ("ColorspaceType", "Colorspace"),
-        ("ChannelType", "Channel"),
-        ("PixelChannel", "PixelChannel"),
-        ("PixelIntensityMethod", "PixelIntensityMethod"),
-        ("PixelInterpolateMethod", "InterpolatePixel"),
-        ("PixelMask", "PixelMask"),
-        ("PixelTrait", "PixelTrait"),
-        ("VirtualPixelMethod", "VirtualPixelMethod"),
-        ("ComplianceType", "Compliance"),
-        ("IlluminantType", "Illuminant"),
-        ("CompressionType", "Compression"),
-        ("KernelInfoType", "Kernel"),
-        ("MorphologyMethod", "Morphology"),
-        ("PreviewType", "Preview"),
-        ("DisposeType", "Dispose"),
-        ("LayerMethod", "Layer"),
-        ("RenderingIntent", "Intent"),
-        ("EndianType", "Endian"),
-        ("QuantumAlphaType", "QuantumAlpha"),
-        ("QuantumFormat", "QuantumFormat"),
-        ("QuantumType", "Quantum"),
-        ("FilterType", "Filter"),
-        ("TimerState", "TimerState"),
-        ("StretchType", "Stretch"),
-        ("StyleType", "Style"),
-        ("AlignType", "Align"),
-        ("DecorationType", "Decoration"),
-        ("DirectionType", "Direction"),
-        ("FillRule", "Rule"),
-        ("GradientType", "Gradient"),
-        ("LineCap", "Cap"),
-        ("LineJoin", "Join"),
-        ("PaintMethod", "Method"),
-        ("PrimitiveType", "Primitive"),
-        ("ReferenceType", "Reference"),
-        ("SpreadMethod", "Spread"),
-        ("WordBreakType", "WordBreakType"),
-        ("CacheType", "Cache"),
-        ("AlphaChannelOption", "AlphaChannel"),
-        ("MetricType", "ErrorMetric"),
-        ("MagickFormatType", "FormatType"),
-        ("MagickInfoFlag", "Flag"),
-        ("DistortMethod", "Distortion"),
-        ("SparseColorMethod", "ColorInterpolate"),
-        ("ComplexOperator", "ComplexOperator"),
-        ("MontageMode", "Mode"),
-        ("MagickCLDeviceType", "DeviceType"),
-        ("CommandOption", "Options"),
-        ("ValidateType", "Validate"),
-        ("CommandOptionFLags", "OptionFlag"),
-        ("PolicyDomain", "PolicyDomain"),
-        ("PolicyRights", "PolicyRights"),
-        ("DitherMethod", "DitherMethod"),
-        ("RegistryType", "RegistryType"),
-        ("ResourceType", "Resource"),
-        ("MagickEvaluateOperator", "EvaluateOperator"),
-        ("MagickFunction", "Function"),
-        ("StatisticType", "Statistic"),
-        ("AutoThresholdMethod", "ThresholdMethod"),
-        ("PathType", "Path"),
-        ("NoiseType", "Noise")
-    ]);
-
-    if !Path::new(&bindings_path_str).exists() {
-        // Create the header file that rust-bindgen needs as input.
-        let gen_h_path = out_dir.join("gen.h");
-        let mut gen_h = File::create(&gen_h_path).expect("could not create file");
-        gen_h
-            .write_all(HEADER.as_bytes())
-            .expect("could not write header file");
-
-        // Geneate the bindings.
-        let mut builder = bindgen::Builder::default()
-            .emit_builtins()
-            .ctypes_prefix("libc")
-            .raw_line("extern crate libc;")
-            .header(gen_h_path.to_str().unwrap())
-            .size_t_is_usize(true)
-            .parse_callbacks(Box::new(ignored_macros))
-            .parse_callbacks(Box::new(remove_enum_suffixes))
-            .blocklist_type("timex")
-            .blocklist_function("clock_adjtime")
-            .default_enum_style(bindgen::EnumVariation::Rust { non_exhaustive: false })
-            .derive_eq(true);
-
-        for d in include_dirs {
-            builder = builder.clang_arg(format!("-I{}", d.to_string_lossy()));
-        }
-
-        let bindings = if cfg!(all(windows, target_pointer_width = "64")) {
-            match builder.clone().generate() {
-                Ok(bindings) => bindings,
-                Err(bindgen::BindgenError::ClangDiagnostic(err_msg)) if err_msg.contains("C++") => {
-                    builder.clang_arg("-xc++").generate().unwrap()
-                }
-                Err(err) => panic!("{:?}", err),
-            }
-        } else {
-            builder.generate().unwrap()
-        };
-        let mut file = File::create(&bindings_path_str).expect("could not create bindings file");
-        // Work around the include! issue in rustc (as described in the
-        // rust-bindgen README file) by wrapping the generated code in a
-        // `pub mod` declaration; see issue #359 in (old) rust-bindgen.
-        file.write_all(b"pub mod bindings {\n").unwrap();
-        file.write_all(bindings.to_string().as_bytes()).unwrap();
-        file.write_all(b"\n}").unwrap();
-
-        std::fs::remove_file(&gen_h_path).expect("could not remove header file");
-    }
-}
-
-fn env_var_set_default(name: &str, value: &str) {
-    if env::var(name).is_err() {
-        env::set_var(name, value);
     }
 }
 
