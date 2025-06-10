@@ -1,3 +1,6 @@
+[workspace]
+resolver = "3"
+
 [package]
 name = "magick_rust"
 version = "1.0.0"
@@ -19,8 +22,14 @@ exclude = [
 libc = "0.2"
 
 [build-dependencies]
-bindgen = "0.69.4"
+bindgen = { version = "0.69.4", default-features = false }
 pkg-config = "0.3"
+
+[target.'cfg(not(target_env = "musl"))'.build-dependencies]
+bindgen = { version = "0.69.4", default-features = false, features = ["runtime"] }
+
+[target.'cfg(target_env = "musl")'.build-dependencies]
+bindgen = { version = "0.69.4", default-features = false, features = ["static"] }
 
 [features]
 # Work-around for bindgen(?) not finding the QuantumRange definition ever since
